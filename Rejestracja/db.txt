@@ -1,0 +1,7 @@
+CREATE DATABASE komunikator;
+
+CREATE TABLE users (id SERIAL,
+fullname VARCHAR(50),
+login VARCHAR(50),
+password VARCHAR(255),
+email VARCHAR(50));
