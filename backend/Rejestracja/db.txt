@@ -1,7 +1,17 @@
 CREATE DATABASE komunikator;
 
-CREATE TABLE users (id SERIAL,
-fullname VARCHAR(50),
-login VARCHAR(50),
-password VARCHAR(255),
-email VARCHAR(50));
+CREATE TABLE users (
+    id SERIAL PRIMARY KEY,
+    fullname VARCHAR(50),
+    login VARCHAR(50),
+    password VARCHAR(255),
+    email VARCHAR(50)),
+);
+
+CREATE TABLE users_token (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id),
+    token TEXT NOT NULL,
+    issued_at TIMESTAMP DEFAULT NOW(),
+    expires_at TIMESTAMP NOT NULL
+);
