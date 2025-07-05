@@ -1,0 +1,7 @@
+PyGreSQL
+python-dotenv
+fastapi[standard]
+uvicorn
+pydantic
+passlib[bcrypt]
+pyjwt
