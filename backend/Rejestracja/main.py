@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, Request, Depends
-from models import RegisterRequest, LoginRequest, PublicKeyRequest, User
+from models import LoginResponse, RegisterRequest, LoginRequest, PublicKeyRequest, User
 from db import db
 import bcrypt
 from dotenv import load_dotenv
@@ -29,11 +29,10 @@ def verify_token(request: Request):
 
     try:
         payload = jwt.decode(token, KEY, algorithms=[ALGORITHM])
-        user_id = payload.get("user_id")
+        user_id = payload.get("id")
         if not user_id:
             raise HTTPException(status_code=401, detail="Nieprawidłowy token")
 
-        # 🔐 Sprawdzenie, czy token istnieje w tabeli users_token
         result = db.query("SELECT * FROM users_token WHERE user_id = $1 AND token = $2 AND expires_at > NOW()", (user_id, token))
         if not result.dictresult():
             raise HTTPException(status_code=401, detail="Token jest nieważny lub został usunięty")
@@ -45,6 +44,24 @@ def verify_token(request: Request):
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Nieprawidłowy token")
 
+async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
+    try:
+        payload = jwt.decode(token, KEY, algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token wygasł")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Niepoprawny token")
+    
+    # Sprawdź, czy token ma wymagane pola
+    if "id" not in payload or "login" not in payload or "email" not in payload:
+        raise HTTPException(status_code=401, detail="Nieautoryzowany")
+    
+    return User(
+        id=payload["id"],
+        login=payload["login"],
+        fullname=payload.get("fullname"),
+        email=payload["email"]
+    )
 
 @app.get("/")
 async def root():
@@ -53,7 +70,7 @@ async def root():
 @app.get("/getusers")
 async def getusers(current_user: int = Depends(verify_token)):
     try:
-        result = db.query("SELECT * FROM users")
+        result = db.query("SELECT * FROM users WHERE id != $1", (current_user,))
         users = result.dictresult()
         return users
     except Exception as e:
@@ -84,20 +101,19 @@ async def login(request: LoginRequest):
         raise HTTPException(status_code=401, detail="Nieprawidłowy login lub hasło")
     
     payload = {
-        "user_id": user_data["id"],
+        "id": user_data["id"],
+        "fullname": user_data["fullname"],
         "login": user_data["login"],
+        "email": user_data["email"],
         "exp": datetime.utcnow() + timedelta(hours=1)
     }
-    
-    user_id = user_data["id"]
-    
     
     token = jwt.encode(payload, KEY, algorithm="HS256")
     
     db.query("""
     INSERT INTO users_token (user_id, issued_at, expires_at, token)
     VALUES ($1, NOW(), NOW() + INTERVAL '1 hour', $2)
-    """, (user_id, token))
+    """, (user_data["id"], token))
     
     return {"access_token": token, "token_type": "bearer"}
  
@@ -122,26 +138,23 @@ async def get_all_users(current_user: int = Depends(verify_token)):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Błąd serwera: {str(e)}")
-
-def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
-    if not token:
-        raise HTTPException(status_code=401, detail="Brak tokenu")
-
     try:
-        payload = jwt.decode(token, KEY, algorithms=[ALGORITHM])
-        user_id = payload.get("user_id")
-        login = payload.get("login")
-        fullname = payload.get("fullname")
-
-        if user_id is None or login is None:
-            raise HTTPException(status_code=401, detail="Nieautoryzowany")
-
-        return User(id=user_id, login=login, fullname=fullname)
-
+        payload = jwt.decode(token, KEY, algorithms=["HS256"])
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token wygasł")
-    except jwt.PyJWTError:
-        raise HTTPException(status_code=401, detail="Token nieważny")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Niepoprawny token")
+    
+    # Sprawdź, czy token ma wymagane pola
+    if "id" not in payload or "login" not in payload or "email" not in payload:
+        raise HTTPException(status_code=401, detail="Nieautoryzowany")
+    
+    return User(
+        id=payload["id"],
+        login=payload["login"],
+        fullname=payload.get("fullname"),
+        email=payload["email"]
+    )
 
 @app.post("/upload_public_key")
 async def upload_public_key(request: PublicKeyRequest, user = Depends(get_current_user)):
@@ -165,9 +178,33 @@ async def upload_public_key(request: PublicKeyRequest, user = Depends(get_curren
     return {"message": f"Klucz publiczny dla użytkownika {user.fullname} został zapisany."}
 
 @app.get("/has_public_key")
-
 async def has_public_key(user: User = Depends(get_current_user)):
     result = db.query("SELECT id FROM encryption_keys WHERE user_id = $1", user.id)
     key_exists = len(result) > 0
     return {"has_public_key": key_exists}
 
+@app.get("/get_user_token", response_model=LoginResponse)
+def get_user_token(login: str):
+    try:
+        # Pobierz ID użytkownika po loginie
+        user = db.query("SELECT id FROM users WHERE login = $1", login)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        user_id = user[0][0]
+
+        # Pobierz najnowszy token
+        token_row = db.query("""
+            SELECT token FROM users_token
+            WHERE user_id = $1
+            ORDER BY issued_at DESC
+            LIMIT 1
+        """, user_id)
+
+        if token_row:
+            return LoginResponse(access_token=token_row[0][0])  # <--- Zmiana tutaj
+        else:
+            raise HTTPException(status_code=404, detail="Token not found")
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
