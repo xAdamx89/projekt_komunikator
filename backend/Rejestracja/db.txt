@@ -15,3 +15,36 @@ CREATE TABLE users_token (
     issued_at TIMESTAMP DEFAULT NOW(),
     expires_at TIMESTAMP NOT NULL
 );
+
+-- Tabela przechowująca konwersacje (czaty)
+CREATE TABLE conversations (
+    id SERIAL PRIMARY KEY,
+    is_group BOOLEAN NOT NULL DEFAULT FALSE,
+    name VARCHAR(100),           -- nazwa grupy (może być NULL dla czatu 1:1)
+    created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+-- Tabela powiązań użytkowników z konwersacjami (uczestnicy czatu)
+CREATE TABLE conversation_participants (
+    conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    joined_at TIMESTAMP NOT NULL DEFAULT now(),
+    PRIMARY KEY (conversation_id, user_id)
+);
+
+-- Tabela wiadomości
+CREATE TABLE messages (
+    id SERIAL PRIMARY KEY,
+    conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    sender_id INTEGER NOT NULL REFERENCES users(id) ON DELETE SET NULL,
+    content TEXT NOT NULL,       -- zaszyfrowana wiadomość
+    sent_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+-- Tabela przechowująca klucze publiczne
+CREATE TABLE encryption_keys (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    public_key TEXT NOT NULL,            -- np. klucz publiczny w formacie base64
+    created_at TIMESTAMP NOT NULL DEFAULT now()
+);

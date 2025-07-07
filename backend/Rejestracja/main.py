@@ -1,16 +1,20 @@
 from fastapi import FastAPI, HTTPException, Request, Depends
-from models import RegisterRequest, LoginRequest
+from models import RegisterRequest, LoginRequest, PublicKeyRequest, User
 from db import db
 import bcrypt
 from dotenv import load_dotenv
-import datetime
+from datetime import datetime, timedelta
 import jwt
 import os
 from dotenv import load_dotenv
+from fastapi.security import OAuth2PasswordBearer
 
 load_dotenv()
 KEY = os.getenv("KEY")
 ALGORITHM = os.getenv("ALGORITHM")
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+
 
 #fastapi dev main.py - żeby uruchomić z terminala
 #uvicorn Rejestracja.main:app --host 0.0.0.0 --port 8001 --reload alternatywa
@@ -28,12 +32,18 @@ def verify_token(request: Request):
         user_id = payload.get("user_id")
         if not user_id:
             raise HTTPException(status_code=401, detail="Nieprawidłowy token")
+
+        # 🔐 Sprawdzenie, czy token istnieje w tabeli users_token
+        result = db.query("SELECT * FROM users_token WHERE user_id = $1 AND token = $2 AND expires_at > NOW()", (user_id, token))
+        if not result.dictresult():
+            raise HTTPException(status_code=401, detail="Token jest nieważny lub został usunięty")
+
         return user_id
+
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token wygasł")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Nieprawidłowy token")
-
 
 
 @app.get("/")
@@ -41,7 +51,7 @@ async def root():
     return {"message": "Hello World!"}
 
 @app.get("/getusers")
-async def getusers():
+async def getusers(current_user: int = Depends(verify_token)):
     try:
         result = db.query("SELECT * FROM users")
         users = result.dictresult()
@@ -76,7 +86,7 @@ async def login(request: LoginRequest):
     payload = {
         "user_id": user_data["id"],
         "login": user_data["login"],
-        "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1)
+        "exp": datetime.utcnow() + timedelta(hours=1)
     }
     
     user_id = user_data["id"]
@@ -90,7 +100,7 @@ async def login(request: LoginRequest):
     """, (user_id, token))
     
     return {"access_token": token, "token_type": "bearer"}
-
+ 
 @app.get("/welcomepage")
 async def get_all_users(current_user: int = Depends(verify_token)):
     try:
@@ -112,4 +122,52 @@ async def get_all_users(current_user: int = Depends(verify_token)):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Błąd serwera: {str(e)}")
+
+def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
+    if not token:
+        raise HTTPException(status_code=401, detail="Brak tokenu")
+
+    try:
+        payload = jwt.decode(token, KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("user_id")
+        login = payload.get("login")
+        fullname = payload.get("fullname")
+
+        if user_id is None or login is None:
+            raise HTTPException(status_code=401, detail="Nieautoryzowany")
+
+        return User(id=user_id, login=login, fullname=fullname)
+
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token wygasł")
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="Token nieważny")
+
+@app.post("/upload_public_key")
+async def upload_public_key(request: PublicKeyRequest, user = Depends(get_current_user)):
+    existing = db.query("SELECT id FROM encryption_keys WHERE user_id = $1", user.id)
     
+    if existing:
+        db.query(
+            "UPDATE encryption_keys SET public_key = $1, created_at = $2 WHERE user_id = $3",
+            request.public_key,
+            datetime.utcnow(),
+            user.id
+        )
+    else:
+        db.query(
+            "INSERT INTO encryption_keys (user_id, public_key, created_at) VALUES ($1, $2, $3)",
+            user.id,
+            request.public_key,
+            datetime.utcnow()
+        )
+
+    return {"message": f"Klucz publiczny dla użytkownika {user.fullname} został zapisany."}
+
+@app.get("/has_public_key")
+
+async def has_public_key(user: User = Depends(get_current_user)):
+    result = db.query("SELECT id FROM encryption_keys WHERE user_id = $1", user.id)
+    key_exists = len(result) > 0
+    return {"has_public_key": key_exists}
+

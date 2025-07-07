@@ -1,6 +1,6 @@
 import os
-from pg import DB
 from dotenv import load_dotenv
+from pg import DB
 
 load_dotenv()
 

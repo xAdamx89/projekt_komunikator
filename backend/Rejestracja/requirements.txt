@@ -1,4 +1,5 @@
 PyGreSQL
+pg
 python-dotenv
 fastapi[standard]
 uvicorn
