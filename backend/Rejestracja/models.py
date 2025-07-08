@@ -1,5 +1,6 @@
 from pydantic import BaseModel, EmailStr
 from typing import Optional
+from datetime import datetime
 
 class RegisterRequest(BaseModel):
     fullname: str
@@ -23,3 +24,22 @@ class User(BaseModel):
     login: str
     fullname: Optional[str] = None
     email: str
+    
+class ConversationRequest(BaseModel):
+    id_od: int
+    id_do: int
+    
+class MessageResponse(BaseModel):
+    id: int
+    conversation_id: int
+    sender_id: int | None
+    content: str
+    sent_at: datetime
+    
+class MessageSendRequest(BaseModel):
+    id_od: int
+    id_do: int
+    content: str
+    
+class PublicKeyRequest(BaseModel):
+    user_id: int

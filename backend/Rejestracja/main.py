@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, Request, Depends
-from models import LoginResponse, RegisterRequest, LoginRequest, PublicKeyRequest, User
+from models import PublicKeyRequest, MessageSendRequest, MessageResponse, ConversationRequest, LoginResponse, RegisterRequest, LoginRequest, PublicKeyRequest, User
 from db import db
 import bcrypt
 from dotenv import load_dotenv
@@ -208,3 +208,143 @@ def get_user_token(login: str):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+@app.post("/conversation")
+def get_or_create_conversation(data: ConversationRequest, current_user: int = Depends(verify_token)):
+    id_od = data.id_od
+    id_do = data.id_do
+
+    if id_od == id_do:
+        raise HTTPException(status_code=400, detail="Nie można stworzyć konwersacji z samym sobą.")
+
+    query = """
+        SELECT cp1.conversation_id
+        FROM conversation_participants cp1
+        WHERE cp1.user_id IN ($1, $2)
+        GROUP BY cp1.conversation_id
+        HAVING COUNT(*) = 2 AND COUNT(DISTINCT cp1.user_id) = 2
+        LIMIT 1
+    """
+    result = db.query(query, id_od, id_do).dictresult()
+
+    if result:
+        return {"conversation_id": result[0]["conversation_id"], "status": "existing"}
+
+    insert_conv = db.insert(
+        'conversations',
+        is_group=False,
+        name=None,
+        created_at=datetime.utcnow()
+    )
+    new_conv_id = insert_conv['id']
+
+    db.insert('conversation_participants', conversation_id=new_conv_id, user_id=id_od, joined_at=datetime.utcnow())
+    db.insert('conversation_participants', conversation_id=new_conv_id, user_id=id_do, joined_at=datetime.utcnow())
+
+    return {"conversation_id": new_conv_id, "status": "created"}
+
+@app.get("/get_messages/{user1_id}/{user2_id}", response_model=list[MessageResponse])
+def get_conversation_messages(user1_id: int, user2_id: int, current_user: int = Depends(verify_token)):
+    if current_user not in (user1_id, user2_id):
+        raise HTTPException(status_code=403, detail="Nie jesteś uczestnikiem tej konwersacji.")
+
+    results = db.query(
+        """
+        SELECT c.id FROM conversations c
+        JOIN conversation_participants p1 ON c.id = p1.conversation_id AND p1.user_id = $1
+        JOIN conversation_participants p2 ON c.id = p2.conversation_id AND p2.user_id = $2
+        WHERE (SELECT COUNT(*) FROM conversation_participants WHERE conversation_id = c.id) = 2
+        LIMIT 1
+        """,
+        user1_id, user2_id
+    ).dictresult()
+
+    if not results:
+        raise HTTPException(status_code=404, detail="Konwersacja nie istnieje.")
+
+    conversation_id = results[0]["id"]
+
+    messages = db.query(
+        """
+        SELECT id, conversation_id, sender_id, content, sent_at
+        FROM messages
+        WHERE conversation_id = $1
+        ORDER BY sent_at ASC
+        """,
+        conversation_id
+    ).dictresult()
+
+    return messages
+
+@app.post("/send_message") #Wysłanie wiadomości od, do i zawartość - zapisje do odpowiedniej konwersacji
+def send_message(request: MessageSendRequest):
+    id_od = request.id_od
+    id_do = request.id_do
+    content = request.content
+
+    if id_od == id_do:
+        raise HTTPException(status_code=400, detail="Nie można wysłać wiadomości do samego siebie.")
+
+    # Szukamy istniejącej konwersacji
+    query = """
+        SELECT cp1.conversation_id
+        FROM conversation_participants cp1
+        JOIN conversation_participants cp2 ON cp1.conversation_id = cp2.conversation_id
+        WHERE cp1.user_id = $1 AND cp2.user_id = $2
+        LIMIT 1
+    """
+    result = db.query(query, id_od, id_do)
+
+    if result:
+        conversation_id = result[0]["conversation_id"]
+    else:
+        # Tworzymy nową konwersację
+        insert_conv = db.insert(
+            'conversations',
+            is_group=False,
+            name=None,
+            created_at=datetime.utcnow()
+        )
+        conversation_id = insert_conv['id']
+
+        # Dodajemy uczestników
+        db.insert('conversation_participants', conversation_id=conversation_id, user_id=id_od, joined_at=datetime.utcnow())
+        db.insert('conversation_participants', conversation_id=conversation_id, user_id=id_do, joined_at=datetime.utcnow())
+
+    # Zapisujemy wiadomość
+    db.insert(
+        'messages',
+        conversation_id=conversation_id,
+        sender_id=id_od,
+        content=content,
+        sent_at=datetime.utcnow()
+    )
+
+    return {
+        "conversation_id": conversation_id,
+        "sender_id": id_od,
+        "content": content,
+        "sent_at": datetime.utcnow()
+    }
+    
+@app.post("/get_public_key")
+def get_public_key(data: PublicKeyRequest, current_user: int = Depends(verify_token)):
+    user_id = data.user_id
+
+    # Pobieramy najnowszy klucz publiczny dla użytkownika
+    query = """
+        SELECT public_key 
+        FROM encryption_keys 
+        WHERE user_id = $1 
+        ORDER BY created_at DESC 
+        LIMIT 1
+    """
+    result = db.query(query, user_id).first()
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Publiczny klucz użytkownika nie został znaleziony.")
+
+    return {"public_key": result["public_key"]}
+
+
+

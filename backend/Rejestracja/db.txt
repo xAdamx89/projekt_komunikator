@@ -38,7 +38,8 @@ CREATE TABLE messages (
     conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
     sender_id INTEGER NOT NULL REFERENCES users(id) ON DELETE SET NULL,
     content TEXT NOT NULL,       -- zaszyfrowana wiadomość
-    sent_at TIMESTAMP NOT NULL DEFAULT now()
+    sent_at TIMESTAMP NOT NULL DEFAULT now(),
+    content_sender_encrypted TEXT NOT NULL DEFAULT ''
 );
 
 -- Tabela przechowująca klucze publiczne
