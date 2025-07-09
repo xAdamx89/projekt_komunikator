@@ -39,7 +39,11 @@ class MessageResponse(BaseModel):
 class MessageSendRequest(BaseModel):
     id_od: int
     id_do: int
-    content: str
+    content: str  # zaszyfrowane dla odbiorcy
+    content_sender_encrypted: str  # zaszyfrowane dla nadawcy
     
 class PublicKeyRequest(BaseModel):
+    public_key: str
+    
+class PublicKeyRequestByUserid(BaseModel):
     user_id: int

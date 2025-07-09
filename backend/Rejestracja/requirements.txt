@@ -1,5 +1,7 @@
 PyGreSQL
 pg
+py-postgresql
+psycopg2
 python-dotenv
 fastapi[standard]
 uvicorn
